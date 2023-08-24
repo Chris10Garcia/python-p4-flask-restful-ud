@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-
-from flask import Flask, request, make_response
+import functools
+from flask import Flask, request, make_response, jsonify
 from flask_migrate import Migrate
 from flask_restful import Api, Resource
-
+from werkzeug.exceptions import NotFound
 from models import db, Newsletter
 
 app = Flask(__name__)
@@ -17,71 +17,147 @@ db.init_app(app)
 api = Api(app)
 
 class Home(Resource):
-
     def get(self):
-        
-        response_dict = {
-            "message": "Welcome to the Newsletter RESTful API",
+        response_body = {
+            "message" : "Welcome to the Newsletter RESTful API",
         }
-        
         response = make_response(
-            response_dict,
-            200,
+            response_body,
+            200
         )
-
         return response
-
-api.add_resource(Home, '/')
+    
+api.add_resource(Home, "/")
 
 class Newsletters(Resource):
+    def response_func(self, responsebody, code):
+        resposne = make_response(
+            responsebody,
+            code
+        )
+        return resposne
 
     def get(self):
-        
-        response_dict_list = [n.to_dict() for n in Newsletter.query.all()]
+        news_dict = [news.to_dict() for news in Newsletter.query.all()]
 
-        response = make_response(
-            response_dict_list,
-            200,
-        )
+        return self.response_func(news_dict, 200)
 
-        return response
+    def post(self):           
+        # figured out how to deal if data came in as raw json or if it was form data         
+        try:
+            request.get_json()
+            form_data = {attr : request.json.get(attr) for attr in request.json if hasattr(Newsletter, attr)}
+        except:
+            request.get_data()
+            form_data = {attr : request.form.get(attr) for attr in request.form if hasattr(Newsletter, attr)}
 
-    def post(self):
-        
-        new_record = Newsletter(
-            title=request.form['title'],
-            body=request.form['body'],
-        )
+        new_record = Newsletter(**form_data)
 
         db.session.add(new_record)
         db.session.commit()
 
-        response_dict = new_record.to_dict()
+        news_dict = new_record.to_dict()
 
+        return self.response_func(news_dict, 200)
+
+api.add_resource(Newsletters, "/newsletters")
+
+
+class NewsLettersByID(Resource):
+
+    # def get(self, id):
+    #     news = Newsletter.query.filter(Newsletter.id == id).first()
+    #     if news == None:
+    #         response_body = "<h1>404, record not found</h1>"
+    #         response = make_response(
+    #             response_body, 
+    #             404
+    #         )
+    #         return response        
+
+    #     news_dict = news.to_dict()
+
+    #     response = make_response(
+    #         news_dict,
+    #         200
+    #     )
+    #     return response        
+
+
+    #this should be a decorator
+    def record_exits(func):
+        @functools.wraps(func)  
+        def wrapper(self, *arg, id):
+            news = Newsletter.query.filter(Newsletter.id == id).first()
+            if news == None:
+                response_body = "<h1>404, record not found</h1>"
+                response = make_response(
+                    response_body, 
+                    404
+                )
+                return response
+            return func(self, news)
+        return wrapper
+
+    def response_func(self, responsebody, code):
         response = make_response(
-            response_dict,
-            201,
+            jsonify(responsebody),
+            code
         )
-
         return response
 
-api.add_resource(Newsletters, '/newsletters')
+    @record_exits
+    def get(self, news):
+        news_dict = news.to_dict()
 
-class NewsletterByID(Resource):
+        return self.response_func(news_dict, 200)
 
-    def get(self, id):
+    # def get(self, id):
+    #     news = Newsletter.query.filter(Newsletter.id == id).first()
+    #     news_dict = news.to_dict()
+    #     return self.response_func(news_dict, 200)
 
-        response_dict = Newsletter.query.filter_by(id=id).first().to_dict()
+    @record_exits
+    def patch(self, news):
+        
+        try:
+            request.get_json()
+            [setattr(news, attr, request.json.get(attr))for attr in request.json if hasattr(Newsletter, attr)]
+        except:
+            request.get_data()
+            [setattr(news, attr, request.form.get(attr))for attr in request.form if hasattr(Newsletter, attr)]            
+    
+        db.session.add(news)
+        db.session.commit()
 
-        response = make_response(
-            response_dict,
-            200,
-        )
+        news_dict = news.to_dict()
 
-        return response
+        return self.response_func(news_dict, 200)   
 
-api.add_resource(NewsletterByID, '/newsletters/<int:id>')
+    @record_exits
+    def delete(self, news):
+        db.session.delete(news)
+        db.session.commit()
 
+        response_body = {
+            "message" : "Record successfully deleted"
+        }
+
+        self.response_func(response_body, 200)
+
+
+api.add_resource(NewsLettersByID, "/newsletters/<int:id>")
+
+@app.errorhandler(NotFound)
+def handle_not_found(e):
+    response = make_response(
+        f"<h1>{e}</h1>",
+        404
+    )
+    return response
+
+app.register_error_handler(404, handle_not_found)
 
 if __name__ == '__main__':
     app.run(port=5555, debug=True)
+
